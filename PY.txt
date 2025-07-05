@@ -1,0 +1,675 @@
+import os
+from twilio.rest import Client
+from dotenv import load_dotenv
+from openpyxl import load_workbook, Workbook
+from datetime import datetime
+from flask import Flask, request, render_template, jsonify
+import subprocess
+
+# Cargar variables de entorno
+load_dotenv()
+
+TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
+TWILIO_WHATSAPP_NUMBER = os.getenv('TWILIO_WHATSAPP_NUMBER')
+
+print('SID:', TWILIO_ACCOUNT_SID)
+print('TOKEN:', TWILIO_AUTH_TOKEN)
+print('NUM:', TWILIO_WHATSAPP_NUMBER)
+
+if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER]):
+    print('ERROR: Faltan credenciales de Twilio. Revisa tu archivo .env')
+    exit(1)
+
+client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+EXCEL_FILE = 'base_bot.xlsx'
+
+def obtener_numeros():
+    try:
+        wb = load_workbook(EXCEL_FILE)
+    except FileNotFoundError:
+        print(f"ERROR: No se encontró el archivo {EXCEL_FILE}.")
+        return []
+    if 'BaseDeEnvio' not in wb.sheetnames:
+        print("ERROR: No se encontró la hoja 'BaseDeEnvio'.")
+        return []
+    ws = wb['BaseDeEnvio']
+    numeros = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        numero = str(row[0]) if row[0] else ''
+        if numero and numero.strip():
+            numero_limpio = numero.strip().replace(' ', '').replace('-', '')
+            if len(numero_limpio) == 10 and numero_limpio.isdigit():
+                numero_limpio = '521' + numero_limpio
+            if not numero_limpio.startswith('whatsapp:'):
+                numero_limpio = f'whatsapp:+{numero_limpio}'
+            numeros.append(numero_limpio)
+    return numeros
+
+def buscar_nombre_por_numero(numero):
+    wb = load_workbook(EXCEL_FILE)
+    ws = wb['BaseDeEnvio']
+    numero_limpio = numero.replace('whatsapp:+52', '').replace('whatsapp:', '').replace('+52', '').replace('+', '').strip()
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if row[0]:
+            base_numero = str(row[0]).replace(' ', '').replace('-', '').strip()
+            if base_numero.endswith(numero_limpio):
+                return row[1] if len(row) > 1 else ''
+    return ''
+
+def registrar_interaccion_excel(numero, opcion, nombre=None, texto_completo=None):
+    print(f"Intentando registrar: {numero}, {opcion}, {nombre}, {texto_completo}")
+    try:
+        wb = load_workbook(EXCEL_FILE)
+        # Leer datos de la pestaña BaseDeEnvio
+        ws_base = wb['BaseDeEnvio']
+        ws_chat = wb['ChatEntrante'] if 'ChatEntrante' in wb.sheetnames else wb.create_sheet('ChatEntrante')
+        # Buscar el registro en BaseDeEnvio
+        encontrado = False
+        for row in ws_base.iter_rows(min_row=2, values_only=True):
+            if str(row[0]) == str(numero):
+                ciudad = row[1] if len(row) > 1 else ''
+                base = row[2] if len(row) > 2 else ''
+                compania = row[3] if len(row) > 3 else ''
+                encontrado = True
+                break
+        if not encontrado:
+            ciudad = ''
+            base = ''
+            compania = ''
+        now = datetime.now()
+        fecha = now.strftime('%d/%m/%Y')
+        hora = now.strftime('%H:%M:%S')
+        # Mensaje y respuesta (opcion)
+        mensaje = texto_completo or ''
+        respuesta = opcion
+        # Si la hoja está vacía, agregar encabezados
+        if ws_chat.max_row == 1:
+            ws_chat.append(['Ciudad','Fecha','Hora','Número','Mensaje','Respuesta','Base','Compañía'])
+        ws_chat.append([ciudad, fecha, hora, numero, mensaje, respuesta, base, compania])
+        wb.save(EXCEL_FILE)
+        print(f"Registro guardado en ChatEntrante: {ciudad}, {fecha}, {hora}, {numero}, {mensaje}, {respuesta}, {base}, {compania}")
+    except Exception as e:
+        print(f"Error guardando en Excel: {e}")
+
+def registrar_respuesta_salida(numero, mensaje):
+    archivo = 'salida_respuestas.xlsx'
+    try:
+        if os.path.exists(archivo):
+            wb = load_workbook(archivo)
+            if 'Respuestas' in wb.sheetnames:
+                ws = wb['Respuestas']
+            else:
+                ws = wb.create_sheet('Respuestas')
+                ws.append(['Fecha', 'Hora', 'Número', 'Mensaje'])
+        else:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = 'Respuestas'
+            ws.append(['Fecha', 'Hora', 'Número', 'Mensaje'])
+        now = datetime.now()
+        fecha = now.strftime('%Y-%m-%d')
+        hora = now.strftime('%H:%M:%S')
+        ws.append([fecha, hora, str(numero), mensaje])
+        wb.save(archivo)
+        print(f"Respuesta registrada en salida_respuestas.xlsx: {fecha}, {hora}, {numero}, {mensaje}")
+    except Exception as e:
+        print(f"Error guardando en salida_respuestas.xlsx: {e}")
+
+def registrar_interaccion_chat(numero, mensaje):
+    try:
+        wb = load_workbook(EXCEL_FILE)
+        if 'ChatEntrante' in wb.sheetnames:
+            ws = wb['ChatEntrante']
+        else:
+            ws = wb.create_sheet('ChatEntrante')
+            ws.append(['Fecha', 'Hora', 'Número', 'Mensaje'])
+        now = datetime.now()
+        fecha = now.strftime('%Y-%m-%d')
+        hora = now.strftime('%H:%M:%S')
+        ws.append([fecha, hora, str(numero), mensaje])
+        wb.save(EXCEL_FILE)
+        print(f"Interacción registrada en ChatEntrante: {fecha}, {hora}, {numero}, {mensaje}")
+    except Exception as e:
+        print(f"Error guardando en ChatEntrante: {e}")
+
+def enviar_mensajes():
+    numeros = obtener_numeros()
+    for numero in numeros:
+        print(f"\nEnviando mensaje a: {numero}")
+        mensaje_opciones = (
+            "Hola, por favor responde con el número de la opción que deseas:\n"
+            "1. Agendar llamada con asesor\n"
+            "2. Chatear con asesor\n"
+            "3. Reagendar llamada/chat\n"
+            "4. Declinar servicio"
+        )
+        try:
+            message = client.messages.create(
+                from_=TWILIO_WHATSAPP_NUMBER,
+                body=mensaje_opciones,
+                to=numero
+            )
+            print(f"Mensaje enviado a {numero} (SID: {message.sid})")
+        except Exception as e:
+            print(f"Error enviando a {numero}: {e}")
+            if 'exceeded the 9 daily messages limit' in str(e) or '63038' in str(e):
+                print("¡Límite diario de mensajes de Twilio alcanzado!")
+                break
+    print("\nTodos los mensajes han sido enviados.")
+
+def enviar_mensaje_prueba():
+    wb = load_workbook(EXCEL_FILE)
+    ws = wb['BaseDeEnvio']
+    numero = None
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if row[0]:
+            numero = str(row[0])
+            break
+    if not numero:
+        print("No se encontró ningún número válido para prueba.")
+        return
+    numero_limpio = numero.strip().replace(' ', '').replace('-', '')
+    if len(numero_limpio) == 10 and numero_limpio.isdigit():
+        numero_limpio = '521' + numero_limpio
+    if not numero_limpio.startswith('whatsapp:'):
+        numero_limpio = f'whatsapp:+{numero_limpio}'
+    print(f"Enviando mensaje de prueba a: {numero_limpio}")
+    mensaje_opciones = (
+        "Hola, este es un mensaje de prueba desde Twilio Python.\n"
+        "Responde con el número de la opción que deseas:\n"
+        "1. Agendar llamada con asesor\n"
+        "2. Chatear con asesor\n"
+        "3. Reagendar llamada/chat\n"
+        "4. Declinar servicio"
+    )
+    try:
+        message = client.messages.create(
+            from_=TWILIO_WHATSAPP_NUMBER,
+            body=mensaje_opciones,
+            to=numero_limpio
+        )
+        print(f"Mensaje de prueba enviado a {numero_limpio} (SID: {message.sid})")
+    except Exception as e:
+        print(f"Error enviando a {numero_limpio}: {e}")
+        if 'exceeded the 9 daily messages limit' in str(e) or '63038' in str(e):
+            print("¡Límite diario de mensajes alcanzado!")
+
+def leer_chat_entrante():
+    mensajes = []
+    try:
+        wb = load_workbook(EXCEL_FILE)
+        if 'ChatEntrante' not in wb.sheetnames:
+            return mensajes
+        ws = wb['ChatEntrante']
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or not row[0]:
+                continue
+            fecha, hora, numero, mensaje = row[:4]
+            # Estado simple: aceptado, rechazado, pendiente (puedes mejorar esto)
+            estado = 'Pendiente'
+            if mensaje:
+                if any(x in str(mensaje).lower() for x in ['1', 'agendar', 'acepto', 'sí', 'si']):
+                    estado = 'Aceptado'
+                elif any(x in str(mensaje).lower() for x in ['4', 'no', 'declino', 'declinar', 'rechazo']):
+                    estado = 'Rechazado'
+            mensajes.append({
+                'fecha': fecha,
+                'hora': hora,
+                'numero': numero,
+                'mensaje': mensaje,
+                'estado': estado
+            })
+    except Exception as e:
+        print(f"Error leyendo ChatEntrante: {e}")
+    return mensajes
+
+def leer_base_de_envio():
+    clientes = []
+    bases = set()
+    companias = set()
+    ciudades = set()
+    try:
+        wb = load_workbook(EXCEL_FILE)
+        if 'BaseDeEnvio' not in wb.sheetnames:
+            return clientes, [], [], []
+        ws = wb['BaseDeEnvio']
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or not row[0]:
+                continue
+            nombre = row[1] if len(row) > 1 else ''
+            numero = row[0]
+            base = row[2] if len(row) > 2 else ''
+            compania = row[3] if len(row) > 3 else ''
+            ciudad = row[4] if len(row) > 4 else ''
+            clientes.append({
+                'nombre': nombre,
+                'numero': numero,
+                'base': base,
+                'compania': compania,
+                'ciudad': ciudad
+            })
+            if base: bases.add(str(base))
+            if compania: companias.add(str(compania))
+            if ciudad: ciudades.add(str(ciudad))
+    except Exception as e:
+        print(f"Error leyendo BaseDeEnvio: {e}")
+    return clientes, sorted(bases), sorted(companias), sorted(ciudades)
+
+
+def crear_app():
+    app = Flask(__name__)
+
+    def contar_registros_base_envio():
+        try:
+            wb = load_workbook(EXCEL_FILE)
+            sheet = wb['BaseDeEnvio']
+            # Contar filas que tienen datos (excluyendo el encabezado)
+            count = sum(1 for row in sheet.iter_rows(min_row=2) if row[0].value is not None)
+            return count
+        except Exception as e:
+            print(f"Error al contar registros: {str(e)}")
+            return 0
+
+    # Endpoint para servir ChatEntrante como JSON
+    @app.route('/api/chatentrante')
+    def api_chatentrante():
+        try:
+            wb = load_workbook(EXCEL_FILE)
+            if 'ChatEntrante' not in wb.sheetnames:
+                return {'data': []}
+            ws = wb['ChatEntrante']
+            # Leer encabezados
+            headers = [cell.value for cell in ws[1]]
+            data = []
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not any(row):
+                    continue
+                item = {headers[i]: row[i] if i < len(row) else None for i in range(len(headers))}
+                data.append(item)
+            return {'data': data}
+        except Exception as e:
+            return {'error': str(e), 'data': []}
+
+    @app.route('/comentarios')
+    def comentarios():
+        # Lee la hoja ChatEntrante y pasa los datos a la plantilla comentarios.html
+        mensajes = []
+        try:
+            wb = load_workbook(EXCEL_FILE)
+            if 'ChatEntrante' in wb.sheetnames:
+                ws = wb['ChatEntrante']
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if not row or not row[0]:
+                        continue
+                    ciudad = row[0] if len(row) > 0 else ''
+                    fecha = row[1] if len(row) > 1 else ''
+                    hora = row[2] if len(row) > 2 else ''
+                    numero = row[3] if len(row) > 3 else ''
+                    respuesta_num = row[4] if len(row) > 4 else ''
+                    mensaje = row[5] if len(row) > 5 else ''
+                    base = row[6] if len(row) > 6 else ''
+                    compania = row[7] if len(row) > 7 else ''
+                    estatus = row[8] if len(row) > 8 else ''
+                    comentario = row[9] if len(row) > 9 else ''
+                    # Convertir respuesta_num a texto
+                    if str(respuesta_num).strip() == '1':
+                        respuesta = 'Llamada'
+                    elif str(respuesta_num).strip() == '2':
+                        respuesta = 'Chat'
+                    elif str(respuesta_num).strip() == '3':
+                        respuesta = 'Agendar'
+                    elif str(respuesta_num).strip() == '4':
+                        respuesta = 'Declinado'
+                    else:
+                        respuesta = 'Desconocido'
+                    mensajes.append({
+                        'ciudad': ciudad,
+                        'fecha': fecha,
+                        'numero': numero,
+                        'respuesta': respuesta,
+                        'estatus': estatus,
+                        'comentario': comentario
+                    })
+        except Exception as e:
+            print(f"Error leyendo ChatEntrante para comentarios: {e}")
+        return render_template('comentarios.html', mensajes=mensajes)
+
+    @app.route('/api/update_status', methods=['POST'])
+    def api_update_status():
+        # Espera JSON: {numero, fecha, estatus, comentario}
+        data = request.get_json()
+        numero = data.get('numero')
+        fecha = data.get('fecha')
+        estatus = data.get('estatus')
+        comentario = data.get('comentario', '')
+        try:
+            wb = load_workbook(EXCEL_FILE)
+            ws = wb['ChatEntrante']
+            updated = False
+            for row in ws.iter_rows(min_row=2):
+                cell_numero = str(row[3].value).strip() if row[3].value else ''
+                cell_fecha = str(row[1].value).strip() if row[1].value else ''
+                if cell_numero == str(numero).strip() and cell_fecha == str(fecha).strip():
+                    # Columna I = 9 (estatus), columna J = 10 (comentario)
+                    if len(row) >= 9:
+                        row[8].value = estatus
+                    if len(row) >= 10:
+                        row[9].value = comentario
+                    else:
+                        # Si la columna J no existe, agregarla
+                        while len(row) < 10:
+                            ws.cell(row=row[0].row, column=len(row)+1, value=None)
+                        ws.cell(row=row[0].row, column=10, value=comentario)
+                    updated = True
+                    break
+            if updated:
+                wb.save(EXCEL_FILE)
+                return {'success': True}
+            else:
+                return {'success': False, 'error': 'No se encontró el registro'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    @app.route('/webhook', methods=['POST'])
+    def webhook():
+        from_number = request.form.get('From', '')
+        body = request.form.get('Body', '').strip()
+        print(f'Respuesta recibida de {from_number}: {body}')
+        registrar_interaccion_chat(from_number, body)
+        return 'OK', 200
+
+    @app.route('/dashboard')
+    def dashboard():
+        # Obtener filtros de la URL
+        mes = request.args.get('mes', 'Todos')
+        ano = request.args.get('ano', 'Todos')
+        filtro_base = request.args.get('base', '')
+        filtro_compania = request.args.get('compania', '')
+        filtro_ciudad = request.args.get('ciudad', '')
+        # --- Nueva métrica: conteo por ciudad y tipo de respuesta ---
+        ciudad_tipo_counter = {}
+        tipos = ['Llamada', 'Chat', 'Agendar', 'Declinado']
+        try:
+            wb = load_workbook(EXCEL_FILE)
+            if 'ChatEntrante' in wb.sheetnames:
+                ws = wb['ChatEntrante']
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    if not row or not row[0]:
+                        continue
+                    ciudad = row[0] if len(row) > 0 else ''
+                    respuesta_num = row[4] if len(row) > 4 else ''
+                    fecha = row[0] if len(row) > 0 else ''
+                    # Filtro por mes y año
+                    fecha_dt = None
+                    if isinstance(fecha, (float, int)):
+                        from openpyxl.utils.datetime import from_excel
+                        try:
+                            fecha_dt = from_excel(fecha)
+                        except Exception:
+                            fecha_dt = None
+                    elif isinstance(fecha, str):
+                        for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y'):
+                            try:
+                                fecha_dt = datetime.strptime(fecha, fmt)
+                                break
+                            except Exception:
+                                continue
+                    elif hasattr(fecha, 'month'):
+                        fecha_dt = fecha
+                    # Si hay filtro, aplicar
+                    if fecha_dt:
+                        mes_nombre = fecha_dt.strftime('%B').capitalize()
+                        ano_val = str(fecha_dt.year)
+                        if (mes != 'Todos' and mes != mes_nombre) or (ano != 'Todos' and ano != ano_val):
+                            continue
+                    # Convertir respuesta_num a texto
+                    if respuesta_num == 1 or str(respuesta_num).strip() == '1':
+                        tipo = 'Llamada'
+                    elif respuesta_num == 2 or str(respuesta_num).strip() == '2':
+                        tipo = 'Chat'
+                    elif respuesta_num == 3 or str(respuesta_num).strip() == '3':
+                        tipo = 'Agendar'
+                    elif respuesta_num == 4 or str(respuesta_num).strip() == '4':
+                        tipo = 'Declinado'
+                    else:
+                        tipo = 'Otro'
+                    if ciudad:
+                        if ciudad not in ciudad_tipo_counter:
+                            ciudad_tipo_counter[ciudad] = {t: 0 for t in tipos}
+                        if tipo in tipos:
+                            ciudad_tipo_counter[ciudad][tipo] += 1
+        except Exception as e:
+            print(f"Error calculando barras apiladas por ciudad: {e}")
+
+        # Preparar datos para Chart.js
+        ciudades_labels = list(ciudad_tipo_counter.keys())
+        llamadas_ciudad = [ciudad_tipo_counter[c]['Llamada'] for c in ciudades_labels]
+        chats_ciudad = [ciudad_tipo_counter[c]['Chat'] for c in ciudades_labels]
+        agendar_ciudad = [ciudad_tipo_counter[c]['Agendar'] for c in ciudades_labels]
+        declinado_ciudad = [ciudad_tipo_counter[c]['Declinado'] for c in ciudades_labels]
+
+        # Leer datos de ChatEntrante y extraer valores únicos para filtros
+        mensajes = []
+        bases_set = set()
+        companias_set = set()
+        ciudades_set = set()
+        wb = load_workbook(EXCEL_FILE)
+        llamadas_por_dia = [0]*7  # Lunes=0 ... Domingo=6
+        chats_por_dia = [0]*7
+        companias_counter = {}
+        from openpyxl.utils.datetime import from_excel
+        if 'ChatEntrante' in wb.sheetnames:
+            ws = wb['ChatEntrante']
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not row or not row[0]:
+                    continue
+                # Estructura esperada: [Ciudad, Fecha, Hora, Número, Mensaje, RespuestaNum, RespuestaTexto, Base, Compañía]
+                ciudad = row[0] if len(row) > 0 else ''
+                fecha = row[1] if len(row) > 1 else ''
+                hora = row[2] if len(row) > 2 else ''
+                numero = row[3] if len(row) > 3 else ''
+                respuesta_num = row[4] if len(row) > 4 else ''  # Columna E, valor numérico
+                mensaje = row[5] if len(row) > 5 else ''        # Columna F, texto (puede ser fórmula)
+                base = row[6] if len(row) > 6 else ''
+                compania = row[7] if len(row) > 7 else ''
+                # Recolectar valores únicos para filtros
+                if base: bases_set.add(str(base))
+                if compania: companias_set.add(str(compania))
+                if ciudad: ciudades_set.add(str(ciudad))
+                # Filtrado por filtros seleccionados (ignorar espacios y mayúsculas)
+                def norm(x):
+                    return str(x).strip().lower() if x is not None else ''
+                if filtro_base and norm(base) != norm(filtro_base):
+                    continue
+                if filtro_compania and norm(compania) != norm(filtro_compania):
+                    continue
+                if filtro_ciudad and norm(ciudad) != norm(filtro_ciudad):
+                    continue
+                # Convertir respuesta_num a texto (si es número o string de número)
+                if str(respuesta_num).strip() == '1':
+                    respuesta = 'Llamada'
+                elif str(respuesta_num).strip() == '2':
+                    respuesta = 'Chat'
+                elif str(respuesta_num).strip() == '3':
+                    respuesta = 'Agendar'
+                elif str(respuesta_num).strip() == '4':
+                    respuesta = 'Declinado'
+                else:
+                    respuesta = 'Desconocido'
+                # Calcular día de la semana
+                fecha_dt = None
+                dia_semana = None
+                dia_semana_nombre = ''
+                if fecha:
+                    if isinstance(fecha, (float, int)):
+                        try:
+                            fecha_dt = from_excel(fecha)
+                        except Exception:
+                            fecha_dt = None
+                    elif isinstance(fecha, str):
+                        for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y'):
+                            try:
+                                fecha_dt = datetime.strptime(fecha, fmt)
+                                break
+                            except Exception:
+                                continue
+                    elif hasattr(fecha, 'month'):
+                        fecha_dt = fecha
+                if fecha_dt is not None:
+                    dia_semana = fecha_dt.weekday()
+                    dias_es = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+                    dia_semana_nombre = dias_es[dia_semana]
+                    if respuesta == 'Llamada':
+                        llamadas_por_dia[dia_semana] += 1
+                    elif respuesta == 'Chat':
+                        chats_por_dia[dia_semana] += 1
+                # Contar compañías para gráfica
+                if compania:
+                    compania_str = str(compania).strip()
+                    if compania_str:
+                        companias_counter[compania_str] = companias_counter.get(compania_str, 0) + 1
+                mensajes.append({
+                    'ciudad': ciudad,
+                    'fecha': fecha,
+                    'hora': hora,
+                    'numero': numero,
+                    'mensaje': mensaje,
+                    'respuesta': respuesta,
+                    'base': base,
+                    'compania': compania,
+                    'dia_semana': dia_semana_nombre
+                })
+        # Preparar datos para la gráfica de compañías
+        companias_labels = list(companias_counter.keys())
+        companias_data = list(companias_counter.values())
+
+        # Mini-cards SIEMPRE muestran todos los datos de ChatEntrante (sin filtrar)
+        # Para esto, volvemos a leer todos los mensajes de ChatEntrante
+        mensajes_todos = []
+        if 'ChatEntrante' in wb.sheetnames:
+            ws = wb['ChatEntrante']
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not row or not row[0]:
+                    continue
+                ciudad = row[0] if len(row) > 0 else ''
+                fecha = row[1] if len(row) > 1 else ''
+                hora = row[2] if len(row) > 2 else ''
+                numero = row[3] if len(row) > 3 else ''
+                mensaje = row[4] if len(row) > 4 else ''
+                respuesta_num = row[5] if len(row) > 5 else ''
+                # Convertir respuesta_num a texto
+                if respuesta_num == 1 or str(respuesta_num).strip() == '1':
+                    respuesta = 'Llamada'
+                elif respuesta_num == 2 or str(respuesta_num).strip() == '2':
+                    respuesta = 'Chat'
+                elif respuesta_num == 3 or str(respuesta_num).strip() == '3':
+                    respuesta = 'Agendar'
+                elif respuesta_num == 4 or str(respuesta_num).strip() == '4':
+                    respuesta = 'Declinado'
+                else:
+                    respuesta = 'Desconocido'
+                mensajes_todos.append({
+                    'ciudad': ciudad,
+                    'fecha': fecha,
+                    'hora': hora,
+                    'numero': numero,
+                    'mensaje': mensaje,
+                    'respuesta': respuesta
+                })
+
+        # enviados: SIEMPRE total de registros en BaseDeEnvio
+        enviados = 0
+        try:
+            wb_base = load_workbook(EXCEL_FILE)
+            if 'BaseDeEnvio' in wb_base.sheetnames:
+                ws_base = wb_base['BaseDeEnvio']
+                enviados = sum(1 for row in ws_base.iter_rows(min_row=2, values_only=True) if row and row[0])
+        except Exception as e:
+            print(f"Error contando enviados desde BaseDeEnvio: {e}")
+        # pendientes_mini: SIEMPRE total de registros en ChatEntrante
+        pendientes_mini = len(mensajes_todos)
+
+        # Contadores por tipo de respuesta (usando la columna respuesta)
+        llamadas = 0
+        chats = 0
+        agendados = 0
+        declinados = 0
+        for m in mensajes:
+            resp = m.get('respuesta', '').strip().lower()
+            if resp == 'llamada':
+                llamadas += 1
+            elif resp == 'chat':
+                chats += 1
+            elif resp == 'agendar':
+                agendados += 1
+            elif resp == 'declinado':
+                declinados += 1
+
+        total_mensajes = len(mensajes)
+        aceptados = llamadas + chats + agendados
+        rechazados = declinados
+        pendientes = total_mensajes - aceptados - rechazados
+
+        mensajes_por_dia = {}
+        mensajes_por_hora = {}
+        opciones = {'1': 0, '2': 0, '3': 0, '4': 0, 'Otro': 0}
+        mensajes_por_dia_semana = [0]*7
+
+        # Obtener el conteo de BaseDeEnvio
+        total_envios = contar_registros_base_envio()
+
+        return render_template('dashboard.html',
+                              mensajes=mensajes,
+                              clientes=mensajes,  # Para compatibilidad con la plantilla
+                              total_mensajes=total_mensajes,
+                              aceptados=aceptados,
+                              rechazados=rechazados,
+                              pendientes=pendientes,
+                              mensajes_por_dia=mensajes_por_dia,
+                              mensajes_por_hora=mensajes_por_hora,
+                              opciones=opciones,
+                              mensajes_por_dia_semana=mensajes_por_dia_semana,
+                              enviados=enviados,
+                              pendientes_mini=total_envios,  # Usar el conteo de BaseDeEnvio
+                              llamadas=llamadas,
+                              chats=chats,
+                              agendados=agendados,
+                              declinados=declinados,
+                              llamadas_por_dia=llamadas_por_dia,
+                              chats_por_dia=chats_por_dia,
+                              companias_labels=companias_labels,
+                              companias_data=companias_data,
+                              ciudades_labels=ciudades_labels,
+                              llamadas_ciudad=llamadas_ciudad,
+                              chats_ciudad=chats_ciudad,
+                              agendar_ciudad=agendar_ciudad,
+                              declinado_ciudad=declinado_ciudad,
+                              bases=sorted(bases_set),
+                              companias=sorted(companias_set),
+                              ciudades=sorted(ciudades_set),
+                              filtro_base=filtro_base,
+                              filtro_compania=filtro_compania,
+                              filtro_ciudad=filtro_ciudad)
+
+    @app.route('/iniciar_bot', methods=['POST'])
+    def iniciar_bot():
+        try:
+            total_envios = contar_registros_base_envio()
+            if total_envios > 0:
+                # Aquí puedes añadir la lógica para ejecutar tu script
+                subprocess.Popen(['python', 'app.py'])
+                return jsonify({'success': True, 'total_envios': total_envios})
+            else:
+                return jsonify({'success': False, 'error': 'No hay registros para enviar en BaseDeEnvio'})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)})
+
+    return app
+
+if __name__ == '__main__':
+    # enviar_mensaje_prueba()  # Solo para pruebas de envío (comentado para evitar envíos)
+    # enviar_mensajes()       # Solo para pruebas de envío masivo (comentado para evitar envíos)
+    app = crear_app()
+    app.run(host='0.0.0.0', port=5000, debug=True)

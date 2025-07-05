@@ -1,0 +1,5 @@
+# Requisitos para el bot de WhatsApp
+flask
+twilio
+openpyxl
+python-dotenv
