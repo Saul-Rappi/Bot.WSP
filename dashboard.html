@@ -796,10 +796,8 @@
                         <table class="crm-table">
                             <thead>
                                 <tr>
-                                    <th>Ciudad</th>
-                                    <th>Fecha</th>
                                     <th>Número</th>
-                                    <th>Mensaje</th>
+                                    <th style="text-align: center;">Solicitud</th>
                                     <th>Estatus</th>
                                     <th>Acción</th>
                                 </tr>
@@ -807,19 +805,29 @@
                             <tbody>
                             {% for m in mensajes %}
                                 <tr>
-                                    <td>{{ m.ciudad }}</td>
-                                    <td>{{ m.fecha }}</td>
                                     <td>{{ m.numero }}</td>
-                                    <td>
+                                    <td style="text-align: center;">
                                         {% if m.respuesta == 'Llamada' %}Llamada{% elif m.respuesta == 'Chat' %}Chat{% elif m.respuesta == 'Agendar' %}Agendar{% elif m.respuesta == 'Declinado' %}Declinado{% else %}Desconocido{% endif %}
                                     </td>
                                     <td>
-                                        <span class="badge badge-pendiente">
-                                            <i class="fa-solid fa-clock"></i> Pendiente
-                                        </span>
+                                        {% if m.estatus %}
+                                            {% if 'chat' in m.estatus|lower %}
+                                                <span class="badge badge-atendida"><i class="fa-solid fa-comments"></i> Chat</span>
+                                            {% elif 'llamada' in m.estatus|lower %}
+                                                <span class="badge badge-atendida"><i class="fa-solid fa-phone"></i> Llamada</span>
+                                            {% elif 'reagend' in m.estatus|lower %}
+                                                <span class="badge badge-reagendada"><i class="fa-solid fa-calendar"></i> Reagendo</span>
+                                            {% elif 'no concluida' in m.estatus|lower %}
+                                                <span class="badge badge-no-concluida"><i class="fa-solid fa-xmark"></i> Declinada</span>
+                                            {% else %}
+                                                <span class="badge badge-pendiente"><i class="fa-solid fa-clock"></i> {{ m.estatus }}</span>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="badge badge-pendiente"><i class="fa-solid fa-clock"></i> Pendiente</span>
+                                        {% endif %}
                                     </td>
                                     <td>
-                                        <button class="btn-accion btn-atendido" onclick="abrirModal(this)"><i class="fa-solid fa-check"></i> Atendida</button>
+                                        <button class="btn-accion btn-atendido" onclick="abrirModal(this)"><i class="fa-solid fa-check"></i> Atender</button>
                                     </td>
                                 </tr>
                             {% endfor %}
@@ -835,19 +843,19 @@
                     <h3 style="margin-bottom: 25px; font-size: 1.2em;">¿Cómo se atendió este lead?</h3>
                     
                     <button class="modal-btn" data-valor="Atendida - Por chat" style="background: #f5f7ff; color: #1976d2; margin: 8px 0; display: flex; align-items: center; justify-content: center; gap: 10px;">
-                        <i class="fa-solid fa-comments"></i> Por chat
+                        <i class="fa-solid fa-comments"></i> Chat
                     </button>
                     
                     <button class="modal-btn" data-valor="Atendida - Por llamada" style="background: #f5f7ff; color: #1976d2; margin: 8px 0; display: flex; align-items: center; justify-content: center; gap: 10px;">
-                        <i class="fa-solid fa-phone"></i> Por llamada
+                        <i class="fa-solid fa-phone"></i> Llamada
                     </button>
                     
                     <button class="modal-btn" data-valor="Reagendada" style="background: #f5f7ff; color: #1976d2; margin: 8px 0; display: flex; align-items: center; justify-content: center; gap: 10px;">
-                        <i class="fa-solid fa-calendar"></i> Se reagendó
+                        <i class="fa-solid fa-calendar"></i> Reagendo
                     </button>
                     
                     <button class="modal-btn" data-valor="No concluida" style="background: #f5f7ff; color: #1976d2; margin: 8px 0; display: flex; align-items: center; justify-content: center; gap: 10px;">
-                        <i class="fa-solid fa-xmark"></i> No concluida
+                        <i class="fa-solid fa-xmark"></i> Declinada
                     </button>
 
                     <textarea id="comentarioInput" 
@@ -880,18 +888,22 @@
                     <i class="fa-solid fa-search"></i>
                     <input type="text" id="searchInput" placeholder="Buscar por número..." onkeyup="searchTable()">
                 </div>
-                <button class="btn-accion" onclick="closeDetailsModal()" style="padding: 10px 20px;">
-                    <i class="fa-solid fa-times"></i> Cerrar
-                </button>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-accion" onclick="exportToExcel()" style="padding: 10px 20px; background: #43a047;">
+                        <i class="fa-solid fa-file-excel"></i> Exportar Excel
+                    </button>
+                    <button class="btn-accion" onclick="closeDetailsModal()" style="padding: 10px 20px;">
+                        <i class="fa-solid fa-times"></i> Cerrar
+                    </button>
+                </div>
             </div>
             <div class="details-body">
                 <table class="details-table" id="detailsTable">
                     <thead>
                         <tr>
-                            <th>Ciudad</th>
-                            <th>Fecha</th>
                             <th>Número</th>
-                            <th>Mensaje</th>
+                            <th>Base</th>
+                            <th style="text-align: center;">Solicitud</th>
                             <th>Estatus</th>
                             <th>Comentarios</th>
                         </tr>
@@ -899,10 +911,9 @@
                     <tbody>
                         {% for m in mensajes %}
                         <tr>
-                            <td>{{ m.ciudad }}</td>
-                            <td>{{ m.fecha }}</td>
                             <td>{{ m.numero }}</td>
-                            <td>
+                            <td>{{ m.base }}</td>
+                            <td style="text-align: center;">
                                 {% if m.respuesta == 'Llamada' %}Llamada
                                 {% elif m.respuesta == 'Chat' %}Chat
                                 {% elif m.respuesta == 'Agendar' %}Agendar
@@ -910,16 +921,24 @@
                                 {% else %}Desconocido{% endif %}
                             </td>
                             <td>
-                                <span class="badge badge-pendiente">
-                                    <i class="fa-solid fa-clock"></i> Pendiente
-                                </span>
+                                {% if m.estatus %}
+                                    {% if 'chat' in m.estatus|lower %}
+                                        <span class="badge badge-atendida"><i class="fa-solid fa-comments"></i> Chat</span>
+                                    {% elif 'llamada' in m.estatus|lower %}
+                                        <span class="badge badge-atendida"><i class="fa-solid fa-phone"></i> Llamada</span>
+                                    {% elif 'reagend' in m.estatus|lower %}
+                                        <span class="badge badge-reagendada"><i class="fa-solid fa-calendar"></i> Reagendo</span>
+                                    {% elif 'no concluida' in m.estatus|lower %}
+                                        <span class="badge badge-no-concluida"><i class="fa-solid fa-xmark"></i> Declinada</span>
+                                    {% else %}
+                                        <span class="badge badge-pendiente"><i class="fa-solid fa-clock"></i> {{ m.estatus }}</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="badge badge-pendiente"><i class="fa-solid fa-clock"></i> Pendiente</span>
+                                {% endif %}
                             </td>
                             <td>
-                                {% if m.comentario %}
-                                    {{ m.comentario }}
-                                {% else %}
-                                    <em style="color: #888;">Sin comentarios</em>
-                                {% endif %}
+                                {% if m.comentario %}{{ m.comentario }}{% else %}<em style="color: #888;">Sin comentarios</em>{% endif %}
                             </td>
                         </tr>
                         {% endfor %}
@@ -1261,9 +1280,7 @@
             }
 
             const tds = filaSeleccionada.querySelectorAll('td');
-            const ciudad = tds[0]?.innerText.trim();
-            const fecha = tds[1]?.innerText.trim();
-            const numero = tds[2]?.innerText.trim();
+            const numero = tds[0]?.innerText.trim();
             const comentario = document.getElementById('comentarioInput').value.trim();
 
             fetch('/api/update_status', {
@@ -1271,7 +1288,6 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     numero: numero,
-                    fecha: fecha,
                     estatus: estatusSeleccionado,
                     comentario: comentario
                 })
@@ -1284,22 +1300,22 @@
                     if (estatusSeleccionado.includes('Por chat')) {
                         badge.className = 'badge badge-atendida';
                         icon = '<i class="fa-solid fa-comments"></i> ';
-                        badge.innerHTML = icon + 'Atendida (chat)';
+                        badge.innerHTML = icon + 'Chat';
                     }
                     else if (estatusSeleccionado.includes('Por llamada')) {
                         badge.className = 'badge badge-atendida';
                         icon = '<i class="fa-solid fa-phone"></i> ';
-                        badge.innerHTML = icon + 'Atendida (llamada)';
+                        badge.innerHTML = icon + 'Llamada';
                     }
                     else if (estatusSeleccionado.includes('Reagendada')) {
                         badge.className = 'badge badge-reagendada';
                         icon = '<i class="fa-solid fa-calendar"></i> ';
-                        badge.innerHTML = icon + 'Reagendada';
+                        badge.innerHTML = icon + 'Reagendo';
                     }
-                    else if (estatusSeleccionado.includes('No concluida')) {
+                    else if (estatusSeleccionado.includes('Declinada')) {
                         badge.className = 'badge badge-no-concluida';
                         icon = '<i class="fa-solid fa-xmark"></i> ';
-                        badge.innerHTML = icon + 'No concluida';
+                        badge.innerHTML = icon + 'Declinada';
                     }
                     cerrarModal();
                 } else {
@@ -1330,7 +1346,7 @@
             const rows = table.getElementsByTagName('tr');
 
             for (let i = 1; i < rows.length; i++) {
-                const numeroCell = rows[i].getElementsByTagName('td')[2];
+                const numeroCell = rows[i].getElementsByTagName('td')[0]; // Changed from 2 to 0
                 if (numeroCell) {
                     const numero = numeroCell.textContent || numeroCell.innerText;
                     if (numero.toLowerCase().indexOf(filter) > -1) {
@@ -1406,6 +1422,62 @@
             const modal = document.getElementById('confirmacionBotModal');
             if (e.target === modal) {
                 cerrarModalConfirmacion();
+            }
+        }
+    </script>
+    <script>
+        // Función para exportar a Excel
+        function exportToExcel() {
+            // Obtener la tabla
+            const table = document.getElementById('detailsTable');
+            
+            // Crear una cadena CSV
+            let csv = [];
+            
+            // Obtener los encabezados
+            const headers = [];
+            const headerCells = table.querySelectorAll('thead th');
+            headerCells.forEach(cell => {
+                headers.push(cell.textContent.trim());
+            });
+            csv.push(headers.join(','));
+            
+            // Obtener las filas de datos
+            const rows = table.querySelectorAll('tbody tr');
+            rows.forEach(row => {
+                const rowData = [];
+                // Obtener todas las celdas de la fila
+                const cells = row.querySelectorAll('td');
+                cells.forEach(cell => {
+                    // Limpiar el texto y escapar las comas
+                    let text = cell.textContent.trim().replace(/"/g, '""');
+                    // Si el texto contiene comas, encerrarlo en comillas
+                    if (text.includes(',')) {
+                        text = `"${text}"`;
+                    }
+                    rowData.push(text);
+                });
+                csv.push(rowData.join(','));
+            });
+            
+            // Crear el contenido del archivo CSV
+            const csvContent = csv.join('\n');
+            
+            // Crear un objeto Blob con el contenido CSV
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            
+            // Crear un enlace temporal para descargar el archivo
+            const link = document.createElement('a');
+            if (link.download !== undefined) {
+                // Crear una URL para el blob
+                const url = window.URL.createObjectURL(blob);
+                link.setAttribute('href', url);
+                link.setAttribute('download', 'reporte_comentarios.csv');
+                
+                // Hacer clic en el enlace
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
             }
         }
     </script>

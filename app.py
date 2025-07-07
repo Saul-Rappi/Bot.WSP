@@ -351,39 +351,35 @@ def crear_app():
 
     @app.route('/api/update_status', methods=['POST'])
     def api_update_status():
-        # Espera JSON: {numero, fecha, estatus, comentario}
+        # Espera JSON: {numero, estatus, comentario}
         data = request.get_json()
         numero = data.get('numero')
-        fecha = data.get('fecha')
         estatus = data.get('estatus')
         comentario = data.get('comentario', '')
+        
         try:
             wb = load_workbook(EXCEL_FILE)
             ws = wb['ChatEntrante']
             updated = False
             for row in ws.iter_rows(min_row=2):
-                cell_numero = str(row[3].value).strip() if row[3].value else ''
-                cell_fecha = str(row[1].value).strip() if row[1].value else ''
-                if cell_numero == str(numero).strip() and cell_fecha == str(fecha).strip():
-                    # Columna I = 9 (estatus), columna J = 10 (comentario)
-                    if len(row) >= 9:
-                        row[8].value = estatus
-                    if len(row) >= 10:
-                        row[9].value = comentario
-                    else:
-                        # Si la columna J no existe, agregarla
-                        while len(row) < 10:
-                            ws.cell(row=row[0].row, column=len(row)+1, value=None)
-                        ws.cell(row=row[0].row, column=10, value=comentario)
+                cell_numero = str(row[3].value).strip() if row[3].value else ''  # Columna D (índice 3)
+                if cell_numero == str(numero).strip():
+                    # Columna I (índice 8) para estatus
+                    # Columna J (índice 9) para comentario
+                    row[8].value = estatus  # Columna I
+                    row[9].value = comentario  # Columna J
                     updated = True
                     break
+
             if updated:
                 wb.save(EXCEL_FILE)
-                return {'success': True}
+                return jsonify({'success': True})
             else:
-                return {'success': False, 'error': 'No se encontró el registro'}
+                return jsonify({'success': False, 'error': 'No se encontró el registro'})
+
         except Exception as e:
-            return {'success': False, 'error': str(e)}
+            print(f"Error actualizando estatus: {e}")
+            return jsonify({'success': False, 'error': str(e)})
 
     @app.route('/webhook', methods=['POST'])
     def webhook():
@@ -487,6 +483,8 @@ def crear_app():
                 mensaje = row[5] if len(row) > 5 else ''        # Columna F, texto (puede ser fórmula)
                 base = row[6] if len(row) > 6 else ''
                 compania = row[7] if len(row) > 7 else ''
+                estatus = row[8] if len(row) > 8 else ''
+                comentario = row[9] if len(row) > 9 else ''
                 # Recolectar valores únicos para filtros
                 if base: bases_set.add(str(base))
                 if compania: companias_set.add(str(compania))
@@ -552,6 +550,8 @@ def crear_app():
                     'respuesta': respuesta,
                     'base': base,
                     'compania': compania,
+                    'estatus': estatus,
+                    'comentario': comentario,
                     'dia_semana': dia_semana_nombre
                 })
         # Preparar datos para la gráfica de compañías
